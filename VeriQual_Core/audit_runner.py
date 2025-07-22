@@ -61,7 +61,7 @@ class AuditRunner:
             name="veriqual.audit",
             level="INFO",
             log_to_console=True,
-            log_to_file=False,
+            log_to_file=True,
             force=True
             )
         self.logger.info("Logger initialisé pour AuditRunner.")
@@ -123,6 +123,8 @@ class AuditRunner:
             if not exists:
                 self.logger.error(f"Erreur détectée : {error}")
                 self.audit_report["structural_errors"].append(error)
+                return self.audit_report
+
             # Extraction des métadonnées de base
             file_name = os.path.basename(self.filepath)
             file_size_bytes = os.path.getsize(self.filepath)
