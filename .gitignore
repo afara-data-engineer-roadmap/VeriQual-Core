@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Logs personnalisés
+logs/
+
+# Environnements
+.env
+.venv/
+venv/
+
+# VSCode / Spyder
+.vscode/
+.spyproject/
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+
+# Fichiers de log
+app.log
+
+# Fichiers temporaires / de test
+sandbox.py
+verify_install.py
+
+# Spécifications (texte et Markdown)
+VeriQual-Core - V1.5 - Spécification Fonctionnelle Finale.*
+VeriQual-Core - V1.5 - Arborescence.txt
+
+# Fichier de config PEP-621 / build
+pyproject.toml
+
+# Système
+.DS_Store
+Thumbs.db

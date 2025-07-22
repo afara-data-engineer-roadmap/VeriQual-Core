@@ -1,0 +1,10 @@
+pyproject.toml
+VeriQual.egg-info/PKG-INFO
+VeriQual.egg-info/SOURCES.txt
+VeriQual.egg-info/dependency_links.txt
+VeriQual.egg-info/top_level.txt
+VeriQual_Core/__init__.py
+tools/__init__.py
+tools/common/__init__.py
+tools/common/files.py
+tools/common/logs.py
