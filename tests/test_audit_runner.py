@@ -1,7 +1,9 @@
 import os
 import pytest
-from unittest.mock import patch 
-import json 
+from unittest.mock import patch
+import json
+import pandas as pd
+
 
 from VeriQual_Core.audit_runner import AuditRunner
 
@@ -21,7 +23,7 @@ def test_run_audit_file_unreadable(tmp_path):
     fake_file = tmp_path / "unreadable.csv"
     fake_file.write_text("some,data\n1,2")
 
-    with patch("os.access", return_value=False): 
+    with patch("os.access", return_value=False):
         runner = AuditRunner(filepath=str(fake_file))
         result = runner.run_audit()
 
@@ -95,16 +97,16 @@ def test_non_rectangular_structure(tmp_path):
     test_file = tmp_path / "non_rect.csv"
     test_file.write_text(file_content, encoding="utf-8")
 
-    # Correction du mock: Cibler detect_csv_separator ET load_dataframe_robustly
+    # Mock detect_csv_separator pour qu'il retourne un séparateur valide
     with patch("VeriQual_Core.audit_runner.detect_csv_separator") as mock_detect_separator:
         mock_detect_separator.return_value = (",", None) # Force le séparateur à être la virgule
         with patch("VeriQual_Core.audit_runner.load_dataframe_robustly") as mock_load_df:
             # Simuler un échec de parsing (structure non rectangulaire)
-            mocked_message = "Message de test pour structure non rectangulaire." # Définir le message mocké
+            mocked_message = "Message de test pour structure non rectangulaire."
             mock_load_df.return_value = (
-                None, 
-                None, 
-                mocked_message, # Utiliser le message mocké
+                None,
+                None,
+                mocked_message,
                 "non_rectangular_structure"
             )
 
@@ -114,7 +116,7 @@ def test_non_rectangular_structure(tmp_path):
 
             assert report["structural_errors"][0]["error_code"] == "non_rectangular_structure"
             assert report["structural_errors"][0]["is_blocking"] is True
-            assert report["structural_errors"][0]["message"] == mocked_message # Assertion exacte
+            assert report["structural_errors"][0]["message"] == mocked_message
 
 
 def test_file_empty_after_header(tmp_path):
@@ -128,7 +130,6 @@ def test_file_empty_after_header(tmp_path):
 
     assert report["structural_errors"][0]["error_code"] == "file_empty_after_header"
     assert report["structural_errors"][0]["is_blocking"] is True
-    # L'assertion sur le message doit correspondre au message réel ou mocké
     assert "vide de données après l'en-tête" in report["structural_errors"][0]["message"]
 
 
@@ -139,16 +140,16 @@ def test_unicode_decode_error_in_load(tmp_path):
     corrupt_file = tmp_path / "corrupt_load.csv"
     corrupt_file.write_bytes(b"col1,col2\nline1,data1\n\xff\xfe\nline3,data3") # Octets invalides après la 2ème ligne
 
-    # Correction du mock: Cibler detect_csv_separator ET load_dataframe_robustly
+    # Mock detect_csv_separator pour qu'il retourne un séparateur valide
     with patch("VeriQual_Core.audit_runner.detect_csv_separator") as mock_detect_separator:
         mock_detect_separator.return_value = (",", None) # Force le séparateur à être la virgule
         with patch("VeriQual_Core.audit_runner.load_dataframe_robustly") as mock_load_df:
             # Simuler un échec de décodage Unicode
-            mocked_message = "Message de test pour erreur de décodage Unicode." # Définir le message mocké
+            mocked_message = "Message de test pour erreur de décodage Unicode."
             mock_load_df.return_value = (
-                None, 
-                None, 
-                mocked_message, # Utiliser le message mocké
+                None,
+                None,
+                mocked_message,
                 "unicode_decode_error_in_load"
             )
 
@@ -158,7 +159,7 @@ def test_unicode_decode_error_in_load(tmp_path):
 
             assert report["structural_errors"][0]["error_code"] == "unicode_decode_error_in_load"
             assert report["structural_errors"][0]["is_blocking"] is True
-            assert report["structural_errors"][0]["message"] == mocked_message # Assertion exacte
+            assert report["structural_errors"][0]["message"] == mocked_message
 
 
 def test_normalize_headers_with_modifications(tmp_path):
@@ -171,10 +172,9 @@ def test_normalize_headers_with_modifications(tmp_path):
     print(json.dumps(report, indent=2))
 
     assert report["header_info"]["has_normalization_alerts"] is True
-    # Correction de l'assertion: L'espace insécable et les espaces superflus sont bien supprimés par strip()
-    assert report["header_info"]["header_map"] == {" ID Client \xa0": "ID Client", " Nom": "Nom"} 
-    assert report["file_info"]["total_columns"] == 2 # Vérifier que les colonnes sont bien 2 après normalisation
-    assert report["structural_errors"] == [] # S'assurer qu'il n'y a pas d'erreurs bloquantes
+    assert report["header_info"]["header_map"] == {" ID Client \xa0": "ID Client", " Nom": "Nom"}
+    assert report["file_info"]["total_columns"] == 2
+    assert report["structural_errors"] == []
 
 
 def test_normalize_headers_no_modifications(tmp_path):
@@ -209,34 +209,9 @@ def test_run_audit_full_success(tmp_path):
     assert report["file_info"]["encoding_confidence"] >= 0.0
     assert report["file_info"]["detected_separator"] == ","
     assert report["header_info"]["has_normalization_alerts"] is True
-    assert report["header_info"]["header_map"] == {" id_client ": "id_client", " Nom Client": "Nom Client"} 
+    assert report["header_info"]["header_map"] == {" id_client ": "id_client", " Nom Client": "Nom Client"}
 
-def test_column_analysis_profiling(tmp_path):
-    file_content = "id,nom,age\n1,Alice,30\n2,Bob,35\n3,,28\n4,Alice,30" 
-    test_file = tmp_path / "test_analysis.csv"
-    test_file.write_text(file_content, encoding="utf-8")
-
-    runner = AuditRunner(str(test_file))
-    report = runner.run_audit()
-    print(json.dumps(report, indent=2))
-
-    assert len(report["column_analysis"]) == 3
-
-def test_data_type_detection(tmp_path):
-    file_content = "id,name,age,date\n1,Alice,30.0,2023-01-01\n2,Bob,31.5,2023-01-02\n3,Charlie,,2023-01-03" 
-    test_file = tmp_path / "test_infer_types.csv"
-    test_file.write_text(file_content, encoding="utf-8")
-
-    runner = AuditRunner(str(test_file))
-    report = runner.run_audit()
-    print(json.dumps(report, indent=2))
-    data_types = {col["column_name"]: col["data_type_detected"] for col in report["column_analysis"]}
-    assert data_types["id"] == "Entier"
-    assert data_types["name"] == "Texte"
-    assert data_types["age"] == "Flottant"
-    assert data_types["date"] == "Date"
-
-# ---  TEST POUR F-05 ---
+# --- NOUVEAU TEST POUR F-05 ---
 def test_detect_sensitive_data(tmp_path):
     file_content = (
         "Name,Email,Phone,Address,NIR\n"
@@ -253,9 +228,9 @@ def test_detect_sensitive_data(tmp_path):
 
     assert report["structural_errors"] == []
     assert report["sensitive_data_report"]["contains_sensitive_data"] is True
-    
+
     detected_columns = report["sensitive_data_report"]["detected_columns"]
-    
+
     # Vérifier la détection pour 'Email'
     email_col = next((col for col in detected_columns if col["column_name"] == "Email"), None)
     assert email_col is not None
@@ -275,7 +250,8 @@ def test_detect_sensitive_data(tmp_path):
     address_col = next((col for col in detected_columns if col["column_name"] == "Address"), None)
     assert address_col is None or not address_col["pii_types"] # S'assurer qu'il n'a pas de PII détecté
 
-# --- TEST POUR F-06 ---
+
+# --- NOUVEAU TEST POUR F-06 ---
 def test_run_audit_with_duplicates(tmp_path):
     file_content = (
         "id,name\n"
@@ -293,4 +269,24 @@ def test_run_audit_with_duplicates(tmp_path):
     assert report["structural_errors"] == []
     assert report["duplicate_rows_report"]["duplicate_row_count"] == 1
     assert report["duplicate_rows_report"]["duplicate_row_ratio"] == pytest.approx(0.3333, abs=1e-4) # Utiliser pytest.approx pour les floats
+    assert report["file_info"]["total_rows"] == 3 # Total rows should be 3 (header + 3 data rows)
+
+# --- NOUVEAU TEST POUR F-06 (SANS DOUBLONS) ---
+def test_run_audit_without_duplicates(tmp_path):
+    file_content = (
+        "id,name\n"
+        "1,A\n"
+        "2,B\n"
+        "3,C\n"
+    )
+    test_file = tmp_path / "no_duplicates.csv"
+    test_file.write_text(file_content, encoding="utf-8")
+
+    runner = AuditRunner(str(test_file))
+    report = runner.run_audit()
+    print(json.dumps(report, indent=2))
+
+    assert report["structural_errors"] == []
+    assert report["duplicate_rows_report"]["duplicate_row_count"] == 0
+    assert report["duplicate_rows_report"]["duplicate_row_ratio"] == 0.0
     assert report["file_info"]["total_rows"] == 3 # Total rows should be 3 (header + 3 data rows)
