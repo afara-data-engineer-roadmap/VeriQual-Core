@@ -11,6 +11,7 @@ Ce module constitue le cœur du moteur VeriQual-Core.
 import os
 import logging
 from typing import Optional, Dict, List, Any, Tuple
+from tools.common.profiling import profile_dataframe_columns, infer_semantic_types,detect_sensitive_data 
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -29,7 +30,6 @@ from tools.common.files import (
     detect_csv_separator,
     load_dataframe_robustly,
 )
-from tools.common.profiling import profile_dataframe_columns, infer_semantic_types,detect_sensitive_data # Import ajouté
 
 class VeriQualConfigV1(BaseModel):
     scoring_profile: Dict[str, int] = Field(
@@ -142,6 +142,112 @@ class AuditRunner:
         df.columns = normalized_columns
         
         return df, header_map, has_normalization_alerts
+
+
+    def _detect_duplicates(self, df: pd.DataFrame) -> Tuple[int, float]:
+        """
+        Détecte les lignes strictement dupliquées dans un DataFrame.
+
+        Args:
+            df (pd.DataFrame): Le DataFrame analysé.
+
+        Returns:
+            Tuple[int, float]: Nombre de doublons et ratio des doublons.
+        """
+        if len(df) == 0:
+            return 0, 0.0
+
+        duplicate_count = int(df.duplicated().sum())
+        duplicate_ratio = round(float(duplicate_count) / len(df), 4)
+
+        return duplicate_count, duplicate_ratio
+    
+    def _calculate_quality_score(
+            self,
+            audit_report: Dict[str, Any],
+            df: pd.DataFrame # Ce paramètre sera supprimé
+            ) -> Tuple[int, Dict[str, int]]:
+        """
+        Calcule le score global de qualité du fichier CSV ainsi que les scores
+        individuels pour chaque composante (Structure, complétude, validité, unicité,
+        conformité).
+        
+        Le calcul s'appuie sur les résultats de l'audit ('audit_report') et les 
+        pondérations définies dans 'self.profile'.
+        
+        Args:
+            audit_report (Dict[str, Any]): Résultat complet de l'audit.
+            # df (pd.DataFrame): Données du fichier analysé. # Le DataFrame n'est plus nécessaire ici
+
+        Returns:
+            Tuple[int, Dict[str, int]]: 
+                - global_score : Score global pondéré (/100) 
+                - component_scores : Détail des scores par composante
+        """
+        
+        component_scores = {key: 0 for key in self.profile}
+
+        # 1. Fiabilité Structurelle (F-01 + F-02)
+        structure_score = 100
+        blocking_errors = [
+            e for e in audit_report.get("structural_errors", [])
+            if e.get("is_blocking", False)
+        ]
+        if blocking_errors:
+            structure_score = 0
+        elif audit_report.get("header_info", {}).get("has_normalization_alerts", False):
+            structure_score = 90 # Déduction si seulement des alertes de normalisation
+
+        component_scores["fiabilite_structurelle"] = structure_score
+
+        # 2. Complétude (F-03)
+        column_profiles = audit_report.get("column_analysis", [])
+        if not column_profiles:
+            component_scores["completude"] = 0
+        else:
+            # Calcul de la moyenne des ratios de complétude par colonne
+            missing_ratios = [col.get("metrics", {}).get("missing_values_ratio", 1.0) for col in column_profiles]
+            avg_missing_ratio = sum(missing_ratios) / len(missing_ratios) if missing_ratios else 1.0
+            component_scores["completude"] = int(round(100 - (avg_missing_ratio * 100)))
+
+        # 3. Validité (F-04)
+        if not column_profiles:
+            component_scores["validite"] = 0
+        else:
+            # Pour V1, score basé sur la présence de types "Inconnu"
+            has_unknown = any(col.get("data_type_detected", "").lower() == "inconnu"
+                              for col in column_profiles)
+            # Si aucun type inconnu, score 100. Sinon, 50 (logique stricte pour V1)
+            component_scores["validite"] = 50 if has_unknown else 100
+            
+            # Optionnel: Pour une validité plus fine, on pourrait vérifier la cohérence du dtype pandas
+            # avec le type sémantique détecté. Ex: si data_type_detected est "Entier" mais pandas_dtype est "object"
+            # et la colonne contient des non-numériques. Pour V1, on reste simple.
+
+        # 4. Unicité (F-06)
+        duplicate_ratio = audit_report.get("duplicate_rows_report", {}).get("duplicate_row_ratio", None)
+        if duplicate_ratio is None: # Si le rapport de doublons est absent (ne devrait pas arriver si F-06 est exécutée)
+            component_scores["unicite"] = 0
+        else:
+            unicite_score = 100 - (duplicate_ratio * 100)
+            component_scores["unicite"] = int(round(unicite_score))
+
+        # 5. Conformité (F-05)
+        contains_pii = audit_report.get("sensitive_data_report", {}).get("contains_sensitive_data", False) # Default False si rapport absent
+        component_scores["conformite"] = 0 if contains_pii else 100 # 0 si PII détectées, 100 sinon
+
+        # Calcul du score global pondéré (F-08)
+        total_weight = sum(self.profile.values())
+        if total_weight == 0: # Éviter division par zéro si les pondérations sont toutes à 0
+            global_score = 0
+        else:
+            weighted_sum = sum(
+                component_scores[dim] * self.profile[dim]
+                for dim in component_scores
+            )
+            global_score = int(round(weighted_sum / total_weight))
+        
+        return global_score, component_scores
 
 
     def run_audit(self) -> Dict[str, Any]:
@@ -268,7 +374,7 @@ class AuditRunner:
         column_profiles = infer_semantic_types(column_profiles, df) # Appel à la fonction de typage sémantique
         self.audit_report["column_analysis"] = column_profiles # Mise à jour avec les types sémantiques
         # F-05: Détection de PII/DCP
-        self.logger.info("Démarrage de la détection PII/DCP (F-06).")
+        self.logger.info("Démarrage de la détection PII/DCP (F-05).") # Correction du message de log F-06 -> F-05
         contains_sensitive, pii_columns = detect_sensitive_data(df, column_profiles)
         self.audit_report["sensitive_data_report"]["contains_sensitive_data"] = contains_sensitive
         self.audit_report["sensitive_data_report"]["detected_columns"] = pii_columns
@@ -277,6 +383,12 @@ class AuditRunner:
         duplicate_count, duplicate_ratio = self._detect_duplicates(df)
         self.audit_report["duplicate_rows_report"]["duplicate_row_count"] = duplicate_count
         self.audit_report["duplicate_rows_report"]["duplicate_row_ratio"] = duplicate_ratio
+
+        # F-07/F-08 : Calcul du score de qualité
+        self.logger.info("Démarrage du calcul du score de qualité (F-07/F-08).")
+        global_score, component_scores = self._calculate_quality_score(self.audit_report, df) # df sera supprimé du paramètre
+        self.audit_report["quality_score"]["global_score"] = global_score
+        self.audit_report["quality_score"]["component_scores"] = component_scores
 
         return self.audit_report
     
@@ -297,3 +409,91 @@ class AuditRunner:
         duplicate_ratio = round(float(duplicate_count) / len(df), 4)
 
         return duplicate_count, duplicate_ratio
+    
+    def _calculate_quality_score(
+            self,
+            audit_report: Dict[str, Any],
+            df: pd.DataFrame # Ce paramètre sera supprimé
+            ) -> Tuple[int, Dict[str, int]]:
+        """
+        Calcule le score global de qualité du fichier CSV ainsi que les scores
+        individuels pour chaque composante (Structure, complétude, validité, unicité,
+        conformité).
+        
+        Le calcul s'appuie sur les résultats de l'audit('audit_report') et les 
+        pondérations définies dans 'self.profile' .
+        
+        Args:
+            audit_report (Dict[str, Any]): Résultat complet de l'audit.
+            # df (pd.DataFrame): Données du fichier analysé. # Le DataFrame n'est plus nécessaire ici
+
+        Returns:
+            Tuple[int, Dict[str, int]]: 
+                - global_score : Score global pondéré (/100) 
+                - component_scores : Détail des scores par composante
+        """
+        
+        component_scores = {key: 0 for key in self.profile}
+
+        # 1. Fiabilité Structurelle (F-01 + F-02)
+        structure_score = 100
+        blocking_errors = [
+            e for e in audit_report.get("structural_errors", [])
+            if e.get("is_blocking", False)
+        ]
+        if blocking_errors:
+            structure_score = 0
+        elif audit_report.get("header_info", {}).get("has_normalization_alerts", False):
+            structure_score = 90 # Déduction si seulement des alertes de normalisation
+
+        component_scores["fiabilite_structurelle"] = structure_score
+
+        # 2. Complétude (F-03)
+        column_profiles = audit_report.get("column_analysis", [])
+        if not column_profiles:
+            component_scores["completude"] = 0
+        else:
+            # Calcul de la moyenne des ratios de complétude par colonne
+            missing_ratios = [col.get("metrics", {}).get("missing_values_ratio", 1.0) for col in column_profiles]
+            avg_missing_ratio = sum(missing_ratios) / len(missing_ratios) if missing_ratios else 1.0
+            component_scores["completude"] = int(round(100 - (avg_missing_ratio * 100)))
+
+        # 3. Validité (F-04)
+        if not column_profiles:
+            component_scores["validite"] = 0
+        else:
+            # Pour V1, score basé sur la présence de types "Inconnu"
+            has_unknown = any(col.get("data_type_detected", "").lower() == "inconnu"
+                              for col in column_profiles
+            )
+            # Si aucun type inconnu, score 100. Sinon, 50 (logique stricte pour V1)
+            component_scores["validite"] = 50 if has_unknown else 100
+            
+            # Optionnel: Pour une validité plus fine, on pourrait vérifier la cohérence du dtype pandas
+            # avec le type sémantique détecté. Ex: si data_type_detected est "Entier" mais pandas_dtype est "object"
+            # et la colonne contient des non-numériques. Pour V1, on reste simple.
+
+        # 4. Unicité (F-06)
+        duplicate_ratio = audit_report.get("duplicate_rows_report", {}).get("duplicate_row_ratio", None)
+        if duplicate_ratio is None: # Si le rapport de doublons est absent (ne devrait pas arriver si F-06 est exécutée)
+            component_scores["unicite"] = 0
+        else:
+            unicite_score = 100 - (duplicate_ratio * 100)
+            component_scores["unicite"] = int(round(unicite_score))
+
+        # 5. Conformité (F-05)
+        contains_pii = audit_report.get("sensitive_data_report", {}).get("contains_sensitive_data", False) # Default False si rapport absent
+        component_scores["conformite"] = 0 if contains_pii else 100 # 0 si PII détectées, 100 sinon
+
+        # Calcul du score global pondéré (F-08)
+        total_weight = sum(self.profile.values())
+        if total_weight == 0: # Éviter division par zéro si les pondérations sont toutes à 0
+            global_score = 0
+        else:
+            weighted_sum = sum(
+                component_scores[dim] * self.profile[dim]
+                for dim in component_scores
+            )
+            global_score = int(round(weighted_sum / total_weight))
+        
+        return global_score, component_scores
