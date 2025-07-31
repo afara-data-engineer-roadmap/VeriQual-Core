@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import patch
 import json
 import pandas as pd
+import tempfile
 
 
 from VeriQual_Core.audit_runner import AuditRunner
@@ -290,3 +291,144 @@ def test_run_audit_without_duplicates(tmp_path):
     assert report["duplicate_rows_report"]["duplicate_row_count"] == 0
     assert report["duplicate_rows_report"]["duplicate_row_ratio"] == 0.0
     assert report["file_info"]["total_rows"] == 3 # Total rows should be 3 (header + 3 data rows)
+
+
+
+def test_quality_score_custom_profile():
+    # Fichier avec une valeur manquante
+    df = pd.DataFrame({
+        "Name": ["Alice", None],  # 50% missing
+        "Age": [30, 25]
+    })
+
+    # Profil de pondération personnalisé
+    custom_profile = {
+        "fiabilite_structurelle": 5,
+        "completude": 80,
+        "validite": 5,
+        "unicite": 5,
+        "conformite": 5
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        df.to_csv(f.name, index=False)
+        runner = AuditRunner(f.name, config_dict={"scoring_profile": custom_profile})
+        report = runner.run_audit()
+
+    # Vérification que le profil est bien utilisé
+    assert report["quality_score"]["profile_used"] == "Personnalisé (Utilisateur)"
+
+    # Vérification des composantes
+    assert report["quality_score"]["component_scores"]["completude"] == 75
+
+    # Score global doit refléter la pondération
+    global_score = report["quality_score"]["global_score"]
+    assert global_score == 80 # Plus précis
+
+
+def test_quality_score_perfect_file():
+    df = pd.DataFrame({
+        "ID": [1, 2, 3],
+        "Name": ["A", "B", "C"],
+        "Value": [10, 20, 30]
+    })
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        df.to_csv(f.name, index=False)
+        runner = AuditRunner(f.name)
+        report = runner.run_audit()
+
+    assert report["structural_errors"] == []
+    assert report["quality_score"]["profile_used"] == "Standard (Défaut)"
+    assert report["quality_score"]["global_score"] == 100
+    assert report["quality_score"]["component_scores"]["fiabilite_structurelle"] == 100
+    assert report["quality_score"]["component_scores"]["completude"] == 100
+    assert report["quality_score"]["component_scores"]["validite"] == 100
+    assert report["quality_score"]["component_scores"]["unicite"] == 100
+    assert report["quality_score"]["component_scores"]["conformite"] == 100
+
+def test_quality_score_structural_error(tmp_path):
+    # Fichier inexistant pour provoquer une erreur structurelle bloquante
+    filepath = tmp_path / "non_existent.csv"
+    runner = AuditRunner(str(filepath))
+    report = runner.run_audit()
+
+    assert report["structural_errors"] != []
+    assert report["structural_errors"][0]["error_code"] == "file_not_found"
+    assert report["quality_score"]["global_score"] == 0
+    assert report["quality_score"]["component_scores"]["fiabilite_structurelle"] == 0
+    # Les autres scores devraient être 0 ou null si le processus s'arrête tôt,
+    # mais pour ce test, on se concentre sur la fiabilité structurelle.
+
+def test_quality_score_header_alerts(tmp_path):
+    file_content = " ID Client \xa0; Nom\n1;Alice" # En-têtes avec espaces et insécables
+    test_file = tmp_path / "headers_mod_score.csv"
+    test_file.write_text(file_content, encoding="utf-8")
+
+    runner = AuditRunner(str(test_file))
+    report = runner.run_audit()
+
+    assert report["structural_errors"] == []
+    assert report["header_info"]["has_normalization_alerts"] is True
+    assert report["quality_score"]["component_scores"]["fiabilite_structurelle"] == 90
+    # Vérifier que le score global est impacté (sera < 100)
+    assert report["quality_score"]["global_score"] < 100
+
+def test_quality_score_missing_values(tmp_path):
+    file_content = "col1,col2\n1,\n2,B\n3," # 2/3 manquants dans col2
+    test_file = tmp_path / "missing_score.csv"
+    test_file.write_text(file_content, encoding="utf-8")
+
+    runner = AuditRunner(str(test_file))
+    report = runner.run_audit()
+
+    assert report["structural_errors"] == []
+    # col1: 0% missing, col2: 66.67% missing (2/3)
+    # Moyenne des missing_ratios: (0 + 0.6667) / 2 = 0.33335
+    # Completude: 100 - (0.33335 * 100) = 66.665 -> 67
+    assert report["quality_score"]["component_scores"]["completude"] == 67
+    assert report["quality_score"]["global_score"] < 100
+
+def test_quality_score_unknown_types(tmp_path):
+    file_content = "id,data\n1,abc\n2,def\n3,ghi" # 'data' sera Texte, mais si on avait un type non géré qui devient "Inconnu"
+    test_file = tmp_path / "unknown_type_score.csv"
+    test_file.write_text(file_content, encoding="utf-8")
+
+    runner = AuditRunner(str(test_file))
+    report = runner.run_audit()
+
+    # Si 'data' est typé comme "Texte", et qu'il n'y a pas de "Inconnu"
+    # alors la validité devrait être 100.
+    # Pour tester le score 50, il faudrait un cas où infer_semantic_types retourne "Inconnu"
+    # ce qui est difficile avec la logique actuelle qui retombe sur "Texte".
+    # Il faudrait un fichier où infer_semantic_types ne peut vraiment pas typer.
+    # Pour l'instant, on peut juste vérifier qu'il n'est pas 0 si pas d'erreur structurelle.
+    assert report["quality_score"]["component_scores"]["validite"] == 100 # Si tous les types sont bien "Texte", "Entier" etc.
+    assert report["structural_errors"] == []
+
+def test_quality_score_duplicates(tmp_path):
+    file_content = "id,name\n1,A\n1,A\n2,B" # 1 duplicate row
+    test_file = tmp_path / "duplicates_score.csv"
+    test_file.write_text(file_content, encoding="utf-8")
+
+    runner = AuditRunner(str(test_file))
+    report = runner.run_audit()
+
+    # 1 duplicate row / 3 total rows = 0.3333 ratio
+    # Unicité = 100 - (0.3333 * 100) = 66.67 -> 67
+    assert report["quality_score"]["component_scores"]["unicite"] == 67
+    assert report["quality_score"]["global_score"] < 100
+    assert report["structural_errors"] == []
+
+def test_quality_score_pii_detected(tmp_path):
+    file_content = "Name,Email\nAlice,alice@example.com\nBob,bob@test.fr" # PII detected
+    test_file = tmp_path / "pii_score.csv"
+    test_file.write_text(file_content, encoding="utf-8")
+
+    runner = AuditRunner(str(test_file))
+    report = runner.run_audit()
+
+    assert report["sensitive_data_report"]["contains_sensitive_data"] is True
+    assert report["quality_score"]["component_scores"]["conformite"] == 0
+    assert report["quality_score"]["global_score"] < 100
+    assert report["structural_errors"] == []
+

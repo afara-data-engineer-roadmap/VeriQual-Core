@@ -71,6 +71,13 @@ class AuditRunner:
             raise ValueError("Configuration invalide fournie au moteur VeriQual-Core.")
 
         self.profile = self.config.scoring_profile
+        
+        # Définir profile_used_name dynamiquement en fonction de la présence de scoring_profile dans config_dict
+        if config_dict and "scoring_profile" in config_dict:
+            self.profile_used_name = "Personnalisé (Utilisateur)"
+        else:
+            self.profile_used_name = "Standard (Défaut)"
+
         self.audit_report = {
             "file_info": {
                 "file_name": None,
@@ -86,14 +93,14 @@ class AuditRunner:
                 "header_map": {}
             },
             "quality_score": {
-                "global_score": None,
-                "profile_used": "Standard (Défaut)",
+                "global_score": 0, # Initialisé à 0 au lieu de None
+                "profile_used": self.profile_used_name,
                 "component_scores": {
-                    "fiabilite_structurelle": None,
-                    "completude": None,
-                    "validite": None,
-                    "unicite": None,
-                    "conformite": None
+                    "fiabilite_structurelle": 0, # Initialisé à 0 au lieu de None
+                    "completude": 0, # Initialisé à 0 au lieu de None
+                    "validite": 0, # Initialisé à 0 au lieu de None
+                    "unicite": 0, # Initialisé à 0 au lieu de None
+                    "conformite": 0 # Initialisé à 0 au lieu de None
                 }
             },
             "column_analysis": [],
@@ -172,8 +179,8 @@ class AuditRunner:
         individuels pour chaque composante (Structure, complétude, validité, unicité,
         conformité).
         
-        Le calcul s'appuie sur les résultats de l'audit ('audit_report') et les 
-        pondérations définies dans 'self.profile'.
+        Le calcul s'appuie sur les résultats de l'audit('audit_report') et les 
+        pondérations définies dans 'self.profile' .
         
         Args:
             audit_report (Dict[str, Any]): Résultat complet de l'audit.
@@ -216,7 +223,8 @@ class AuditRunner:
         else:
             # Pour V1, score basé sur la présence de types "Inconnu"
             has_unknown = any(col.get("data_type_detected", "").lower() == "inconnu"
-                              for col in column_profiles)
+                              for col in column_profiles
+            )
             # Si aucun type inconnu, score 100. Sinon, 50 (logique stricte pour V1)
             component_scores["validite"] = 50 if has_unknown else 100
             
@@ -279,7 +287,6 @@ class AuditRunner:
         self.logger.info("Vérification des permissions de lecture sur le fichier.")
         readable, error = check_file_readable(self.filepath)
         if not readable:
-            self.logger.error(f"Erreur détectée : {error}")
             self.audit_report["structural_errors"].append({
                 "error_code": "file_unreadable",
                 "message": error,
@@ -374,7 +381,7 @@ class AuditRunner:
         column_profiles = infer_semantic_types(column_profiles, df) # Appel à la fonction de typage sémantique
         self.audit_report["column_analysis"] = column_profiles # Mise à jour avec les types sémantiques
         # F-05: Détection de PII/DCP
-        self.logger.info("Démarrage de la détection PII/DCP (F-05).") # Correction du message de log F-06 -> F-05
+        self.logger.info("Démarrage de la détection PII/DCP (F-05).") 
         contains_sensitive, pii_columns = detect_sensitive_data(df, column_profiles)
         self.audit_report["sensitive_data_report"]["contains_sensitive_data"] = contains_sensitive
         self.audit_report["sensitive_data_report"]["detected_columns"] = pii_columns
