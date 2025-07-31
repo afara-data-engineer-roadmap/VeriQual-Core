@@ -1,4 +1,4 @@
-# VeriQual/tools/common/logs.py
+# -*- coding: utf-8 -*-
 import logging
 import sys
 import os
@@ -32,7 +32,7 @@ def configure_logging(
     Raises:
         ValueError: Si le niveau de log fourni est invalide.
     """
-    # 1. Validation du niveau de log
+    # 1. Validation du niveau de log (Critique 3: "Fail-Fast")
     level_upper = level.upper()
     log_level = getattr(logging, level_upper, None)
     if not isinstance(log_level, int):
@@ -42,7 +42,7 @@ def configure_logging(
     logger = logging.getLogger(name)
     logger.setLevel(log_level)
 
-    # 3. Gestion de la reconfiguration ("force=True")
+    # 3. Gestion de la reconfiguration (Critique 2: "force=True")
     if force and logger.hasHandlers():
         logger.handlers.clear()
 
@@ -50,14 +50,13 @@ def configure_logging(
     if logger.hasHandlers():
         return logger
 
-    # 4. Empêcher la propagation au logger racine ("propagate")
+    # 4. Empêcher la propagation au logger racine (Critique 1: "propagate")
     # C'est la manière propre d'isoler le logger.
     logger.propagate = False
 
-    # 5. Création du formatter personnalisé ou par défaut ("flexibilité")
-    default_format = ('%(asctime)s - %(name)s - %(levelname)s - '
-                      '%(message)s') # Respect de la limite de ligne
-    default_date_format = '%Y%m%d-%H%M%S'
+    # 5. Création du formatter personnalisé ou par défaut (Critique 4: "flexibilité")
+    default_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    default_date_format = '%Y-%m-%d %H:%M:%S'
     
     formatter = logging.Formatter(
         fmt=format_string or default_format,
@@ -71,29 +70,11 @@ def configure_logging(
         logger.addHandler(console_handler)
 
     # 7. Handler pour le fichier
-    if log_to_file:
-        log_dir = os.path.dirname(log_file)
-        if log_dir: # Vérifie si un répertoire est spécifié
-            try:
-                # Créer le répertoire si non existant, exist_ok=True évite l'erreur
-                os.makedirs(log_dir, exist_ok=True)
-            except OSError as e:
-                # Gérer l'erreur de création du répertoire sans planter
-                logger.error(f"Impossible de créer le répertoire de logs "
-                             f"'{log_dir}': {e}. Le logging vers le fichier "
-                             f"sera désactivé.")
-                log_to_file = False # Désactive le logging fichier pour cette exécution
-
-        if log_to_file: # Vérifie à nouveau si le logging fichier est toujours activé
-            try:
-                file_handler = logging.FileHandler(log_file, mode='a')
-                file_handler.setFormatter(formatter)
-                logger.addHandler(file_handler)
-            except Exception as e:
-                # Gérer les autres erreurs de configuration du FileHandler
-                logger.error(f"Impossible de configurer le FileHandler "
-                             f"pour '{log_file}': {e}. Le logging vers le "
-                             f"fichier sera désactivé.")
-                log_to_file = False # Désactive le logging fichier
+    log_dir = os.path.dirname(log_file)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    file_handler = logging.FileHandler(log_file, mode='a')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
     return logger
