@@ -5,9 +5,7 @@ import json
 import pandas as pd
 import tempfile
 
-
 from VeriQual_Core.audit_runner import AuditRunner
-
 
 def test_run_audit_file_not_found():
     runner = AuditRunner(filepath="fichier_inexistant.csv")
@@ -18,7 +16,6 @@ def test_run_audit_file_not_found():
     error = result["structural_errors"][0]
     assert error["error_code"] == "file_not_found"
     assert error["is_blocking"] is True
-
 
 def test_run_audit_file_unreadable(tmp_path):
     fake_file = tmp_path / "unreadable.csv"
@@ -77,7 +74,6 @@ def test_run_audit_success_minimal(tmp_path):
     assert result["header_info"]["has_normalization_alerts"] is False
     assert result["header_info"]["header_map"] == {}
 
-
 def test_detect_semicolon_separator(tmp_path):
     file_content = "Nom;Age;Ville\nAlice;30;Paris\nBob;25;Lyon\n"
     test_file = tmp_path / "semicolon_test.csv"
@@ -91,7 +87,6 @@ def test_detect_semicolon_separator(tmp_path):
     assert report["file_info"]["total_columns"] == 3
     assert report["file_info"]["total_rows"] == 2
     assert report["structural_errors"] == []
-
 
 def test_non_rectangular_structure(tmp_path):
     file_content = "id,name\n1,alice\n2\n3,bob,paris"
@@ -119,7 +114,6 @@ def test_non_rectangular_structure(tmp_path):
             assert report["structural_errors"][0]["is_blocking"] is True
             assert report["structural_errors"][0]["message"] == mocked_message
 
-
 def test_file_empty_after_header(tmp_path):
     file_content = "col1,col2\n" # En-tête mais pas de données
     test_file = tmp_path / "empty_after_header.csv"
@@ -132,7 +126,6 @@ def test_file_empty_after_header(tmp_path):
     assert report["structural_errors"][0]["error_code"] == "file_empty_after_header"
     assert report["structural_errors"][0]["is_blocking"] is True
     assert "vide de données après l'en-tête" in report["structural_errors"][0]["message"]
-
 
 def test_unicode_decode_error_in_load(tmp_path):
     # Fichier avec un encodage qui provoquera UnicodeDecodeError lors du chargement pandas
@@ -162,7 +155,6 @@ def test_unicode_decode_error_in_load(tmp_path):
             assert report["structural_errors"][0]["is_blocking"] is True
             assert report["structural_errors"][0]["message"] == mocked_message
 
-
 def test_normalize_headers_with_modifications(tmp_path):
     file_content = " ID Client \xa0; Nom\n1;Alice" # En-têtes avec espaces et insécables
     test_file = tmp_path / "headers_mod.csv"
@@ -177,7 +169,6 @@ def test_normalize_headers_with_modifications(tmp_path):
     assert report["file_info"]["total_columns"] == 2
     assert report["structural_errors"] == []
 
-
 def test_normalize_headers_no_modifications(tmp_path):
     file_content = "ID_Client,Nom\n1,Alice" # En-têtes propres
     test_file = tmp_path / "headers_clean.csv"
@@ -190,7 +181,6 @@ def test_normalize_headers_no_modifications(tmp_path):
     assert report["header_info"]["has_normalization_alerts"] is False
     assert report["header_info"]["header_map"] == {}
     assert report["structural_errors"] == []
-
 
 def test_run_audit_full_success(tmp_path):
     file_content = " id_client , Nom Client\n1,Alice\n2,Bob" # Fichier propre avec en-têtes à normaliser
@@ -251,7 +241,6 @@ def test_detect_sensitive_data(tmp_path):
     address_col = next((col for col in detected_columns if col["column_name"] == "Address"), None)
     assert address_col is None or not address_col["pii_types"] # S'assurer qu'il n'a pas de PII détecté
 
-
 # --- NOUVEAU TEST POUR F-06 ---
 def test_run_audit_with_duplicates(tmp_path):
     file_content = (
@@ -292,8 +281,6 @@ def test_run_audit_without_duplicates(tmp_path):
     assert report["duplicate_rows_report"]["duplicate_row_ratio"] == 0.0
     assert report["file_info"]["total_rows"] == 3 # Total rows should be 3 (header + 3 data rows)
 
-
-
 def test_quality_score_custom_profile():
     # Fichier avec une valeur manquante
     df = pd.DataFrame({
@@ -324,7 +311,6 @@ def test_quality_score_custom_profile():
     # Score global doit refléter la pondération
     global_score = report["quality_score"]["global_score"]
     assert global_score == 80 # Plus précis
-
 
 def test_quality_score_perfect_file():
     df = pd.DataFrame({
@@ -431,4 +417,3 @@ def test_quality_score_pii_detected(tmp_path):
     assert report["quality_score"]["component_scores"]["conformite"] == 0
     assert report["quality_score"]["global_score"] < 100
     assert report["structural_errors"] == []
-

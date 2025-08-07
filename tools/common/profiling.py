@@ -3,6 +3,8 @@
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple 
 import re 
+from tools.common.logs import configure_logging
+import numpy as np
 
 
 def profile_dataframe_columns(df: pd.DataFrame, header_map: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
@@ -38,7 +40,7 @@ def profile_dataframe_columns(df: pd.DataFrame, header_map: Optional[Dict[str, s
 
         # Métriques de base (applicables à tous les types de colonnes)
         missing_ratio = col_data.isna().sum() / total_rows if total_rows > 0 else 0.0
-        unique_count = col_data.nunique(dropna=False) 
+        unique_count = col_data.nunique(dropna=False)
         unique_ratio = unique_count / total_rows if total_rows > 0 else 0.0
 
         type_specific_metrics = {}
@@ -93,7 +95,6 @@ def profile_dataframe_columns(df: pd.DataFrame, header_map: Optional[Dict[str, s
         })
     return profile
 
-
 def infer_semantic_types(profiled_columns: List[Dict[str, Any]], df: pd.DataFrame) -> List[Dict[str, Any]]:
     """
     Interprète les métriques de profilage et le contenu du DataFrame pour déduire le type
@@ -147,8 +148,6 @@ def infer_semantic_types(profiled_columns: List[Dict[str, Any]], df: pd.DataFram
                 # Si aucun format spécifique n'a fonctionné, ou si le ratio est trop bas,
                 # on tente une dernière fois sans format spécifique (où le warning pourrait apparaître si non géré)
                 # ou on considère directement que c'est du texte.
-                # Pour éviter le warning ici, on peut décider que si les formats courants n'ont pas marché,
-                # c'est du texte, ou on peut le laisser tenter et gérer le warning globalement si nécessaire.
                 # Pour V1, on va dire que si les formats courants ne marchent pas, c'est Texte.
                 data_type = "Texte"
         else:
@@ -159,7 +158,6 @@ def infer_semantic_types(profiled_columns: List[Dict[str, Any]], df: pd.DataFram
         col_profile["data_type_detected"] = data_type
         
     return profiled_columns
-
 
 def detect_sensitive_data(df: pd.DataFrame, column_profiles: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
     """
@@ -199,7 +197,7 @@ def detect_sensitive_data(df: pd.DataFrame, column_profiles: List[Dict[str, Any]
             pii_types.append("EMAIL")
         if col_data_str.str.contains(PHONE_REGEX, regex=True, na=False).any():
             pii_types.append("PHONE")
-        if col_data_str.str.contains(NIR_REGEX, regex=True, na=False).any(): 
+        if col_data_str.str.contains(NIR_REGEX, regex=True, na=False).any():
             pii_types.append("NIR")
 
         if pii_types:

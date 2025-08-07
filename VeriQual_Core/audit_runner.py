@@ -14,9 +14,10 @@ from typing import Optional, Dict, List, Any, Tuple
 from tools.common.profiling import profile_dataframe_columns, infer_semantic_types,detect_sensitive_data 
 
 from pydantic import BaseModel, Field, ValidationError
-
+from tools.common.files import get_csv_files_in_directory
+import traceback
 import pandas as pd
-
+import json
 import csv 
 
 from tools.common.logs import configure_logging
@@ -42,7 +43,6 @@ class VeriQualConfigV1(BaseModel):
         }
     )
 
-    
 class AuditRunner:
     def __init__(self, filepath: str, config_dict: Optional[Dict[str, Any]] = None):
 
@@ -150,7 +150,6 @@ class AuditRunner:
         
         return df, header_map, has_normalization_alerts
 
-
     def _detect_duplicates(self, df: pd.DataFrame) -> Tuple[int, float]:
         """
         Détecte les lignes strictement dupliquées dans un DataFrame.
@@ -257,7 +256,6 @@ class AuditRunner:
         
         return global_score, component_scores
 
-
     def run_audit(self) -> Dict[str, Any]:
         """
         Lance le processus d’audit et retourne un dictionnaire JSON normalisé.
@@ -330,8 +328,9 @@ class AuditRunner:
         
         # F-01: Détection du séparateur
         detected_separator_sniffer, separator_error_msg = detect_csv_separator(self.filepath, detected_encoding)
+        print("sep:" , detected_separator_sniffer)
         if separator_error_msg:
-            self.logger.error(f"Erreur détectée : {separator_error_msg}")
+            self.logger.error(f"Erreur détectée  : {separator_error_msg}")
             self.audit_report["structural_errors"].append({
                 "error_code": "separator_undetectable",
                 "message": separator_error_msg,
@@ -504,3 +503,38 @@ class AuditRunner:
             global_score = int(round(weighted_sum / total_weight))
         
         return global_score, component_scores
+    
+    def run_batch_audit(self, directory_path: str, output_dir: str) -> dict:
+        """
+        Lance l'audit sur tous les fichiers CSV d'un répertoire donné
+        et sauvegarde chaque rapport dans un répertoire de sortie.
+    
+        Args:
+            directory_path (str): Chemin du répertoire contenant les fichiers CSV.
+            output_dir (str): Répertoire où les rapports JSON seront enregistrés.
+    
+        Returns:
+            dict: Mapping {nom_fichier: "success" | "error message"}.
+        """
+        batch_results = {}
+        csv_files = get_csv_files_in_directory(directory_path)
+    
+        os.makedirs(output_dir, exist_ok=True)
+    
+        for filepath in csv_files:
+            filename = os.path.basename(filepath)
+            output_path = os.path.join(output_dir, filename.replace('.csv', '.json'))
+    
+            try:
+                runner = AuditRunner(filepath=filepath)
+                report = runner.run_audit()
+    
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(report, f, ensure_ascii=False, indent=2)
+    
+                batch_results[filename] = "success"
+            except Exception as e:
+                batch_results[filename] = f"Échec : {str(e)}"
+    
+        return batch_results
+
